@@ -1,10 +1,10 @@
 #include <iostream>
-#include <vector>
+#include <cstring> // For strncpy
 
-// Enum representing order types
+// Enum for order types
 enum ordertype {LIMIT, MARKET};
 
-// Base class Order
+// Base Order class
 class Order {
 protected:
     long timestamp;            // Epoch time
@@ -27,76 +27,167 @@ public:
         symbol[sizeof(symbol) - 1] = '\0';
     }
 
-    // Virtual method to get outstanding quantity
+    // Pure virtual function to get the outstanding quantity
     virtual unsigned int getOutstandingQuantity() const = 0;
 
-    // Getter methods
+    // Getters for other fields
     unsigned int getID() const { return id; }
     unsigned int getQuantity() const { return quantity; }
     unsigned int getPrice() const { return price; }
 };
 
-// Derived class OpenOrder
+// Derived OpenOrder class
 class OpenOrder : public Order {
 public:
     OpenOrder(long timestamp_, bool is_buy_, unsigned int id_, unsigned int price_,
               unsigned int quantity_, const char* venue_, const char* symbol_, ordertype type_)
         : Order(timestamp_, is_buy_, id_, price_, quantity_, venue_, symbol_, type_) {}
 
-    // Open orders have outstanding quantity equal to their current quantity
     unsigned int getOutstandingQuantity() const override {
         return quantity;
     }
 };
 
-// Derived class ClosedOrder
+// Derived ClosedOrder class
 class ClosedOrder : public Order {
 public:
     ClosedOrder(long timestamp_, bool is_buy_, unsigned int id_, unsigned int price_,
                 unsigned int quantity_, const char* venue_, const char* symbol_, ordertype type_)
         : Order(timestamp_, is_buy_, id_, price_, quantity_, venue_, symbol_, type_) {}
 
-    // Closed orders have no outstanding quantity
     unsigned int getOutstandingQuantity() const override {
         return 0;
     }
 };
 
-// Container class VectorOrder to manage orders
+// VectorOrder class to manage an array of Order pointers
 class VectorOrder {
 private:
-    std::vector<Order*> orders;
+    Order** orders;               // Array of pointers to Order objects
+    unsigned int capacity;        // Maximum number of orders the array can hold
+    unsigned int current_new_order_offset;  // Tracks where the next new order should be placed
+
+    // Helper function to resize the array when capacity is exceeded
+    void resize() {
+        capacity *= 2;
+        Order** new_orders = new Order*[capacity];
+        for (unsigned int i = 0; i < current_new_order_offset; ++i) {
+            new_orders[i] = orders[i];
+        }
+        delete[] orders;
+        orders = new_orders;
+    }
 
 public:
+    // Constructor
+    VectorOrder(unsigned int initial_capacity = 10)
+        : capacity(initial_capacity), current_new_order_offset(0) {
+        orders = new Order*[capacity];
+    }
+
+    // Destructor to clean up allocated memory
     ~VectorOrder() {
-        for (Order* order : orders) {
-            delete order;
+        clear();
+        delete[] orders;
+    }
+
+    // Add a new order to the array
+    bool add_order(Order* o) {
+        // Check if order ID already exists
+        for (unsigned int i = 0; i < current_new_order_offset; ++i) {
+            if (orders[i]->getID() == o->getID()) {
+                return false; // Order ID already exists
+            }
         }
+
+        // Resize the array if capacity is exceeded
+        if (current_new_order_offset == capacity) {
+            resize();
+        }
+
+        // Add the new order
+        orders[current_new_order_offset++] = o;
+        return true;
     }
 
-    void addOrder(Order* order) {
-        orders.push_back(order);
+    // Delete an order by its ID
+    bool delete_order(unsigned int id) {
+        bool found = false;
+        for (unsigned int i = 0; i < current_new_order_offset; ++i) {
+            if (orders[i]->getID() == id) {
+                found = true;
+                delete orders[i]; // Free the memory
+                // Shift the remaining orders to fill the gap
+                for (unsigned int j = i; j < current_new_order_offset - 1; ++j) {
+                    orders[j] = orders[j + 1];
+                }
+                --current_new_order_offset;
+                break;
+            }
+        }
+        return found;
     }
 
-    // Print all orders with outstanding quantities
-    void printOutstandingOrders() const {
-        for (const Order* order : orders) {
-            std::cout << "Order ID: " << order->getID() << ", Outstanding Quantity: " << order->getOutstandingQuantity() << std::endl;
+    // Clear all orders from the array
+    void clear() {
+        for (unsigned int i = 0; i < current_new_order_offset; ++i) {
+            delete orders[i];
+        }
+        current_new_order_offset = 0;
+    }
+
+    // Get total volume (sum of all order quantities)
+    int get_total_volume() const {
+        int total_volume = 0;
+        for (unsigned int i = 0; i < current_new_order_offset; ++i) {
+            total_volume += orders[i]->getQuantity();
+        }
+        return total_volume;
+    }
+
+    // Get total outstanding volume
+    int get_total_outstanding_volume() const {
+        int total_outstanding_volume = 0;
+        for (unsigned int i = 0; i < current_new_order_offset; ++i) {
+            total_outstanding_volume += orders[i]->getOutstandingQuantity();
+        }
+        return total_outstanding_volume;
+    }
+
+    // Print orders with outstanding volume
+    void print_outstanding_orders() const {
+        for (unsigned int i = 0; i < current_new_order_offset; ++i) {
+            std::cout << "Order ID: " << orders[i]->getID()
+                      << ", Outstanding Quantity: " << orders[i]->getOutstandingQuantity()
+                      << std::endl;
         }
     }
 };
 
+// Main function to demonstrate functionality
 int main() {
-    VectorOrder manager;
+    VectorOrder manager(5);
 
-    // Adding an open order
-    manager.addOrder(new OpenOrder(1633072800, true, 101, 200, 10, "NYSE", "AAPL", LIMIT));
-    
-    // Adding a closed order
-    manager.addOrder(new ClosedOrder(1633072900, false, 102, 150, 15, "NASDAQ", "GOOG", MARKET));
+    // Add some open and closed orders
+    manager.add_order(new OpenOrder(1633072800, true, 101, 200, 10, "NYSE", "AAPL", LIMIT));
+    manager.add_order(new ClosedOrder(1633072900, false, 102, 150, 15, "NASDAQ", "GOOG", MARKET));
+
+    // Print total volume
+    std::cout << "Total Volume: " << manager.get_total_volume() << std::endl;
+
+    // Print outstanding volume
+    std::cout << "Outstanding Volume: " << manager.get_total_outstanding_volume() << std::endl;
 
     // Print outstanding orders
-    manager.printOutstandingOrders();
+    manager.print_outstanding_orders();
+
+    // Delete an order
+    if (manager.delete_order(101)) {
+        std::cout << "Order 101 deleted." << std::endl;
+    }
+
+    // Print total volume after deletion
+    std::cout << "Total Volume after deletion: " << manager.get_total_volume() << std::endl;
 
     return 0;
 }
